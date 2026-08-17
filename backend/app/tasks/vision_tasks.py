@@ -8,6 +8,8 @@ from skimage.feature import local_binary_pattern
 from scipy.stats import zscore
 from scipy.spatial.distance import euclidean
 
+import graph_segmenter_cpp
+
 from app.tasks.celery_app import celery_app
 from app.fusion.engine import EvidentialFusionEngine
 
@@ -118,47 +120,32 @@ class ComplexSceneForensics:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         h, w = gray.shape
         
-        patch_variances = []
-        patch_coords = []
+        rows = (h - patch_size + 1) // patch_size
+        cols = (w - patch_size + 1) // patch_size
         
-        # 1. Receptive Field Scanning (Grid Breakdown)
-        # Added +1 to ensure the edges are reached cleanly
-        for y in range(0, h - patch_size + 1, patch_size):
-            for x in range(0, w - patch_size + 1, patch_size):
+        patch_variances = np.zeros((rows, cols), dtype=np.float64)
+        
+        for r in range(rows):
+            for c in range(cols):
+                y = r * patch_size
+                x = c * patch_size
                 patch = gray[y:y+patch_size, x:x+patch_size]
-                
-                # Extract noise/texture signature using Laplacian variance
-                variance = cv2.Laplacian(patch, cv2.CV_64F).var()
-                
-                patch_variances.append(variance)
-                patch_coords.append((x, y))
+                patch_variances[r, c] = cv2.Laplacian(patch, cv2.CV_64F).var()
 
-        # EDGE CASE: If the image is smaller than patch_size
-        if not patch_variances:
-            return [], 0.0
-                
-        # 2. Anomaly Scoring using Z-scores
-        variances_np = np.array(patch_variances)
-        std_dev = np.std(variances_np)
-
-        # EDGE CASE: If the image is completely uniform (std_dev == 0), zscore returns NaNs
+        std_dev = np.std(patch_variances)
         if std_dev == 0:
-            z_scores = np.zeros_like(variances_np)
+            z_scores = np.zeros_like(patch_variances)
         else:
-            z_scores = zscore(variances_np)
+            z_scores = (patch_variances - np.mean(patch_variances)) / std_dev
+            
+        # Execute the C++ BFS traversal
+        # This runs at near-native C++ speeds
+        components = graph_segmenter_cpp.find_forged_components(z_scores, anomaly_threshold)
         
-        # 3. Flagging anomalies
-        suspicious_patches = []
-        for i, z in enumerate(z_scores):
-            if abs(z) > anomaly_threshold:
-                suspicious_patches.append({
-                    "coords": patch_coords[i],
-                    "z_score": float(z),                   # Cast to float for JSON Celery serialization
-                    "variance": float(variances_np[i])     # Cast to float for JSON Celery serialization
-                })
-                
-        return suspicious_patches, float(np.mean(variances_np))
+        structural_splices = [c for c in components if c["area"] >= 3 and c["compactness"] < 1.5]
+        risk_score = float(np.clip(len(structural_splices) * 0.5, 0.0, 1.0))
 
+        return components, risk_score
 
 @celery_app.task(name="app.tasks.vision_tasks.run_image_pipeline", bind=True)
 def run_image_pipeline(self, task_id: str, file_bytes_hex: str) -> Dict[str, Any]:
