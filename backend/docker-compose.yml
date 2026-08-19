@@ -24,12 +24,11 @@ services:
     container_name: aitrace_api
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
-      - "8080:8000"
+      - "8000:8000"
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
     volumes:
-      # - ./app:/app/app <--- REMOVED (See explanation below)
       - shared-artifacts:/tmp/aitrace_artifacts
     depends_on:
       redis:
@@ -51,7 +50,6 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
     volumes:
-      # - ./app:/app/app <--- REMOVED (See explanation below)
       - shared-artifacts:/tmp/aitrace_artifacts
     depends_on:
       redis:

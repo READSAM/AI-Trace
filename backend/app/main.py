@@ -1,5 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, status #receive requests ,uploads ,  send status or error codes 
 from fastapi.responses import JSONResponse #handle JSOn response/exception
+from fastapi.staticfiles import StaticFiles
 import redis #caching
 import json #converting pytohn objects into json format to be stored in redis 
 import uuid #generating task_id uniquely
@@ -21,6 +22,8 @@ app = FastAPI(
     version=settings.VERSION,
     openapi_url=f"{settings.API_V1_STR}/openapi.json"
 ) #create an web app host
+
+app.mount("/api/v1/artifacts", StaticFiles(directory="/tmp/aitrace_artifacts"), name="artifacts")
 
 # Shared Redis Client for Hash Caching
 redis_client = redis.Redis.from_url(settings.REDIS_CACHE_URL, decode_responses=True) #connection pool with the enabling of python object response
@@ -99,11 +102,34 @@ async def get_task_status(task_id: UUID): #to show progress status at the user e
     elif async_result.state in ["STARTED", "RETRY"]:
         return TaskResultResponse(task_id=task_id, status=TaskStatusEnum.PROCESSING)
     elif async_result.state == "SUCCESS":
-        return TaskResultResponse(
-            task_id=task_id,
-            status=TaskStatusEnum.COMPLETED,
-            **async_result.result #other fields are returned collectively as result
-        )
+        result_data = async_result.result
+                
+                # 1. Print exactly what the text task returned so we can see it in the terminal
+        print(f"DEBUG - Raw Celery Result: {result_data}")
+        print(f"DEBUG - Result Type: {type(result_data)}")
+
+        try:
+            # 2. Safely check if it's a dictionary before unpacking
+            if isinstance(result_data, dict):
+                return TaskResultResponse(
+                    task_id=task_id,
+                    status=TaskStatusEnum.COMPLETED,
+                    **result_data
+                )
+            else:
+                # If it's not a dict, stuff the raw output into the error field so it doesn't crash
+                return TaskResultResponse(
+                    task_id=task_id,
+                    status=TaskStatusEnum.COMPLETED,
+                    error=f"Task succeeded but returned non-dict format: {str(result_data)}"
+                )
+        except Exception as e:
+            # 3. Catch Pydantic validation errors and return them cleanly to the frontend!
+            return TaskResultResponse(
+                task_id=task_id,
+                status=TaskStatusEnum.FAILED,
+                error=f"Pydantic Validation Error: {str(e)}"
+            )
     else:
         return TaskResultResponse(
             task_id=task_id,
