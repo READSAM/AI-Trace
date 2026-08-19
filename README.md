@@ -61,14 +61,39 @@ AI-Trace is a distributed, event-driven backend pipeline and real-time dashboard
 
 ## ⚡ Key Features
 
-* **Real-Time Polling Dashboard:** Next.js frontend with dynamic metric rendering that automatically adapts to image-specific visual heatmaps or text-specific NLP cards based on the backend response.
+* **Real-Time Polling Dashboard:** Next.js frontend with dynamic metric rendering that automatically adapts to image-specific visual heatmaps or text-specific NLP cards.
 * **Non-Blocking Ingestion:** Instant `202 Accepted` responses with microsecond turnaround via FastAPI and Celery.
-* **$O(1)$ Fast-Path Perceptual Caching:** Computes Perceptual Hash (`pHash`) for images and SHA-256 for text, bypassing worker computation on duplicate/near-identical inputs.
-* **Frequency-Domain Signal Analysis:** 2D Fast Fourier Transform (FFT) and azimuthal radial power spectrum integration to detect high-frequency grid artifacts left by generative upsampling/transposed convolutions.
-* **Spatial Compression Analysis:** Error Level Analysis (ELA) with scaled differential matrices ($15\times$) to highlight non-uniform local JPEG re-compression.
-* **Statistical NLP Forensics:** Sentence-level burstiness calculation ($\frac{\sigma_L - \mu_L}{\sigma_L + \mu_L}$) and autoregressive log-likelihood perplexity mapping.
-* **Mathematical Evidential Decision Fusion:** Fuses conflicting and heterogeneous signals into calibrated probabilities and Dempster-Shafer belief distributions ($\text{Belief}_{\text{AI}}$, $\text{Belief}_{\text{Authentic}}$, $\text{Uncertainty}$).
-* **Hardware-Agnostic:** Optimized for CPU execution out-of-the-box with full multi-container Docker Compose support and shared volume mounting for static assets.
+* **$O(1)$ Fast-Path Caching:** Computes Perceptual Hash (`pHash`) for images and SHA-256 for text, bypassing worker computation on duplicate inputs.
+* **Frequency-Domain Signal Analysis:** 2D Fast Fourier Transform (FFT) and azimuthal radial power spectrum integration.
+* **Spatial Compression Analysis:** Error Level Analysis (ELA) with scaled differential matrices to highlight non-uniform local JPEG re-compression.
+* **Statistical NLP Forensics:** Autoregressive log-likelihood perplexity mapping and sentence-level stylometric burstiness profiling.
+* **Transformer-Based Classification:** Context-aware semantic analysis using fine-tuned sliding-window sequence classifiers (DeBERTa-v3).
+* **Mathematical Evidential Decision Fusion:** Fuses conflicting signals into calibrated probabilities and Dempster-Shafer belief distributions.
+
+---
+
+## ⚙️ Celery Worker Pipelines
+
+AI-Trace offloads all intensive computations to specialized asynchronous Celery workers running isolated environments.
+
+### 🖼️ Vision Pipeline (`run_image_pipeline`)
+
+1. **Hex Byte Ingestion:** Receives image data as hex strings over Redis to bypass JSON serialization limits, decoded directly into NumPy `uint8` arrays via OpenCV.
+2. **Multi-Algorithm Extraction:**
+* **FFT Spectral Analyzer:** Computes the `frequency_anomaly_score`.
+* **ELA Differential Engine:** Computes the `ela_discrepancy_score`.
+* **Complex Scene Forensics:** Extracts the `spatial_anomaly_score` and `synthetic_noise_score` using localized patch analysis.
+
+
+3. **Artifact Persistence:** Visually generated 2D FFT and ELA heatmaps are saved directly to the `/tmp/aitrace_artifacts` shared Docker volume.
+4. **Evidential Fusion:** Sub-scores are routed through the `EvidentialFusionEngine` using strict modality weights and bias parameters.
+
+### 📝 NLP Pipeline (`run_text_pipeline`)
+
+1. **Stylometric Analyzer:** Utilizes NLTK sentence tokenization to calculate variance against the mean length distribution (`burstiness`).
+2. **Perplexity Calculator:** Loads GPT-2 via HuggingFace `transformers` to compute sliding-window autoregressive cross-entropy loss and raw perplexity mapping.
+3. **DeBERTa Sequence Classifier:** Chunks input context into 512-token windows, passing them through `microsoft/deberta-v3-small` for semantic classification.
+4. **Evidential Fusion & Metadata:** Analyzes the three sub-scores through the fusion engine and dynamically calculates document structural metadata (total word and sentence counts).
 
 ---
 
@@ -152,79 +177,11 @@ Interactive Swagger documentation is available at `http://localhost:8000/docs`.
 | `file` | binary | Conditional | Image file (required if modality=IMAGE) |
 | `text_content` | string | Conditional | Raw text payload (required if modality=TEXT) |
 
-**Response (`202 Accepted`):**
-
-```json
-{
-  "task_id": "8f3b2a19-9c32-4d21-a4ef-1200fa882a1b",
-  "status": "QUEUED",
-  "estimated_ms": 450,
-  "created_at": "2026-08-20T00:00:00Z"
-}
-
-```
-
-### 2. Poll Task Execution Status & Result
-
-`GET /api/v1/forensics/tasks/{task_id}`
-
-**Image Response (`200 OK`):**
-
-```json
-{
-  "task_id": "8f3b2a19-...",
-  "status": "COMPLETED",
-  "verdict": {
-    "is_ai_generated": true,
-    "confidence_score": 0.932,
-    "classification": "HIGH_CONFIDENCE_AI_GENERATED",
-    "belief_distribution": {
-      "belief_ai": 0.884,
-      "belief_authentic": 0.041,
-      "uncertainty": 0.075
-    }
-  },
-  "sub_metrics": {
-    "frequency_anomaly_score": 0.89,
-    "ela_discrepancy_score": 0.94,
-    "spatial_anomaly_score": 0.96
-  },
-  "artifacts": {
-    "fft_spectrum_url": "/api/v1/artifacts/fft_8f3b2a19.png",
-    "ela_heatmap_url": "/api/v1/artifacts/ela_8f3b2a19.png"
-  },
-  "execution_time_ms": 185
-}
-
-```
-
-**Text Response (`200 OK`):**
-
-```json
-{
-  "task_id": "a1b2c3d4-...",
-  "status": "COMPLETED",
-  "verdict": {
-    "is_ai_generated": false,
-    "confidence_score": 0.12,
-    "classification": "AUTHENTIC_HUMAN_TEXT"
-  },
-  "sub_metrics": {
-    "perplexity_score": 0.15,
-    "burstiness_variance": 0.82,
-    "linguistic_anomaly": 0.09
-  },
-  "artifacts": null,
-  "execution_time_ms": 110
-}
-
-```
-
 ---
 
 ## 🧮 Mathematical & Algorithmic Core
 
-### 1. 2D FFT Spectral Integration
+### 1. Image: 2D FFT Spectral Integration
 
 Generative models introduce periodic grid artifacts during transposed convolution operations. We calculate the azimuthal average of the centered 2D Fourier power spectrum:
 
@@ -232,16 +189,48 @@ $$P(r) = \frac{1}{N_\theta} \sum_\theta \vert{}F(r, \theta)\vert{}^2$$
 
 High-frequency outer bands are statistically evaluated for variance spikes.
 
-### 2. Error Level Analysis (ELA)
+### 2. Image: Error Level Analysis (ELA)
 
 Calculates localized pixel discrepancies after re-saving at a fixed 90% JPEG quality scale:
 
 $$D(x, y) = \vert{}I_{\text{orig}}(x, y) - I_{\text{resaved}}(x, y)\vert{} \times 15.0$$
 
-### 3. Evidential Logit Fusion
+### 3. Text: Stylometric Variance & Burstiness
 
-Combines heterogeneous component probabilities $p_i$ with reliability weights $w_i$ using calibrated Platt log-odds scaling:
+Human writers naturally vary their sentence lengths, creating "bursts" of long and short structures, while LLMs tend to regress to a uniform mean length. Burstiness is calculated over the sentence length vector $L$:
+
+$$\text{Burstiness} = \frac{\sigma_L - \mu_L}{\sigma_L + \mu_L}$$
+
+A lower or flat burstiness score is linearly mapped to a higher AI-generation probability.
+
+### 4. Text: Autoregressive Log-Likelihood (Perplexity)
+
+Evaluates token predictability using a causal language model (e.g., GPT-2) via a sliding-window cross-entropy loss. Synthetic text typically clusters in low-perplexity regimes (PPL < 20):
+
+$$\text{Perplexity}(X) = \exp\left(-\frac{1}{N} \sum_{i=1}^N \log P(x_i \vert{} x_1, \dots, x_{i-1})\right)$$
+
+Raw perplexity is mapped to an AI probability space using a sigmoid decay curve:
+
+$$P(\text{AI}) = \frac{1}{1 + \exp\left(\frac{PPL - 25.0}{5.0}\right)}$$
+
+### 5. Text: Transformer-Based Sequence Classification
+
+Leverages fine-tuned bidirectional transformers (`microsoft/deberta-v3-small`) to evaluate semantic context. The text is chunked into 512-token windows, and sliding-window attention is applied to extract the underlying softmax logic mapping AI versus human semantics.
+
+### 6. Evidential Logit Fusion
+
+Combines heterogeneous component probabilities $p_i$ across all worker modalities with reliability weights $w_i$ using calibrated Platt log-odds scaling:
 
 $$\text{Logit}_{\text{fused}} = \sum_{i=1}^{k} w_i \cdot \ln \left( \frac{p_i}{1 - p_i} \right) + b$$
 
 $$P(\text{AI Generated}) = \frac{1}{1 + e^{-\text{Logit}_{\text{fused}}}}$$
+
+---
+
+## 🛡️ License
+
+**Copyright © 2026 Samriddhi. All Rights Reserved.**
+
+This software and associated documentation files (the "Software") are proprietary and confidential. No part of this Software may be reproduced, copied, modified, distributed, or transmitted in any form or by any means without prior written permission from the author.
+
+For academic inquiries, architectural discussions, or authorized usage requests, please contact the repository owner directly.
